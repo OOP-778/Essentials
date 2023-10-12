@@ -1,5 +1,6 @@
 package com.earth2me.essentials;
 
+import java.lang.ref.WeakReference;
 import org.bukkit.command.Command;
 import org.bukkit.command.PluginIdentifiableCommand;
 import org.bukkit.plugin.Plugin;
@@ -13,7 +14,7 @@ import java.util.Map;
 import java.util.logging.Level;
 
 public class AlternativeCommandsHandler {
-    private final transient Map<String, List<Command>> altcommands = new HashMap<>();
+    private final transient Map<String, List<WeakReference<Command>>> altcommands = new HashMap<>();
     private final transient Map<String, String> disabledList = new HashMap<>();
     private final transient IEssentials ess;
 
@@ -35,17 +36,27 @@ public class AlternativeCommandsHandler {
             final String commandName = commandSplit.length > 1 ? commandSplit[1] : entry.getKey();
             final Command command = entry.getValue();
 
-            final List<Command> pluginCommands = altcommands.computeIfAbsent(commandName.toLowerCase(Locale.ENGLISH), k -> new ArrayList<>());
+            final List<WeakReference<Command>> pluginCommands = altcommands.computeIfAbsent(commandName.toLowerCase(Locale.ENGLISH), k -> new ArrayList<>());
             boolean found = false;
-            for (final Command pc2 : pluginCommands) {
+
+            final Iterator<WeakReference<Command>> iterator = pluginCommands.iterator();
+            while (iterator.hasNext()) {
+                final WeakReference<Command> next = iterator.next();
+                final Command pc2 = next.get();
+                if (pc2 == null) {
+                    iterator.remove();
+                    continue;
+                }
+
                 // Safe cast, everything that's added comes from getPluginCommands which already performs the cast check.
                 if (((PluginIdentifiableCommand) pc2).getPlugin().equals(plugin)) {
                     found = true;
                     break;
                 }
             }
+
             if (!found) {
-                pluginCommands.add(command);
+                pluginCommands.add(new WeakReference<>(command));
             }
         }
     }
@@ -61,9 +72,9 @@ public class AlternativeCommandsHandler {
     }
 
     public void removePlugin(final Plugin plugin) {
-        final Iterator<Map.Entry<String, List<Command>>> iterator = altcommands.entrySet().iterator();
+        final Iterator<Map.Entry<String, List<WeakReference<Command>>>> iterator = altcommands.entrySet().iterator();
         while (iterator.hasNext()) {
-            final Map.Entry<String, List<Command>> entry = iterator.next();
+            final Map.Entry<String, List<WeakReference<Command>>> entry = iterator.next();
             entry.getValue().removeIf(pc -> !(pc instanceof PluginIdentifiableCommand) || ((PluginIdentifiableCommand) pc).getPlugin().equals(plugin));
             if (entry.getValue().isEmpty()) {
                 iterator.remove();
@@ -72,21 +83,31 @@ public class AlternativeCommandsHandler {
     }
 
     public Command getAlternative(final String label) {
-        final List<Command> commands = altcommands.get(label);
+        final List<WeakReference<Command>> commands = altcommands.get(label);
         if (commands == null || commands.isEmpty()) {
             return null;
         }
+
         if (commands.size() == 1) {
-            return commands.get(0);
+            return commands.get(0).get();
         }
-        // return the first command that is not an alias
-        for (final Command command : commands) {
+
+        final Iterator<WeakReference<Command>> iterator = commands.iterator();
+        while (iterator.hasNext()) {
+            final WeakReference<Command> next = iterator.next();
+            final Command command = next.get();
+            if (command == null) {
+                iterator.remove();
+                continue;
+            }
+
             if (command.getName().equalsIgnoreCase(label)) {
                 return command;
             }
         }
+
         // return the first alias
-        return commands.get(0);
+        return commands.get(0).get();
     }
 
     public void executed(final String label, final Command pc) {
